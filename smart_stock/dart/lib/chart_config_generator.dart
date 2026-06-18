@@ -104,11 +104,20 @@ class ChartConfigGenerator {
   /// 生成趋势预测的虚线覆盖层
   PredictionOverlay generatePredictionOverlay() {
     final pred = payload.prediction;
-    final predReturn = pred.predictedReturn;
     final ci = pred.confidenceInterval;
     final direction = pred.trendProbability.primaryDirection;
 
-    final lastPrice = closePrices.isNotEmpty ? closePrices.last : 0.0;
+    if (closePrices.isEmpty) {
+      return PredictionOverlay(
+        predictedLine: const [],
+        lowerBound: 0,
+        upperBound: 0,
+        direction: 'flat',
+      );
+    }
+
+    final predReturn = pred.predictedReturn;
+    final lastPrice = closePrices.last;
     final lastIdx = closePrices.length - 1;
 
     final predictedLine = <FlSpot>[];
@@ -426,8 +435,9 @@ class ChartConfigGenerator {
                 return SideTitleWidget(
                   axisSide: meta.axisSide,
                   child: Text(
-                  value.toStringAsFixed(1),
-                  style: const TextStyle(fontSize: 10),
+                    value.toStringAsFixed(1),
+                    style: const TextStyle(fontSize: 10),
+                  ),
                 );
               }
               if (value == meta.max) {
@@ -436,7 +446,8 @@ class ChartConfigGenerator {
                   child: Text(
                     value.toStringAsFixed(1),
                     style: const TextStyle(fontSize: 10),
-                  );
+                  ),
+                );
               }
               return const SizedBox.shrink();
             },
@@ -471,12 +482,7 @@ class ChartConfigGenerator {
       lineTouchData: LineTouchData(
         enabled: true,
         touchTooltipData: LineTouchTooltipData(
-          getTooltipColor: (touchedSpots) {
-            if (touchedSpots.isEmpty) return Colors.transparent;
-            return touchedSpots.first.barIndex == 0
-                ? _kLineColor.withOpacity(0.8)
-                : _upColor.withOpacity(0.8);
-          },
+          tooltipBgColor: _kLineColor.withOpacity(0.8),
           getTooltipItems: (touchedSpots) {
             return touchedSpots.map((spot) {
               final isPrediction = spot.barIndex == 1;
@@ -488,7 +494,7 @@ class ChartConfigGenerator {
                           ? markers[spot.barIndex - 2].isBuy
                               ? '买入'
                               : '卖出'
-                          : ''
+                          : '')
                       : '价格';
               return LineTooltipItem(
                 '$label: ${spot.y.toStringAsFixed(2)}',
@@ -601,7 +607,4 @@ class FlDotCustomPainter extends FlDotPainter {
 
   @override
   Size getSize(FlSpot spot, double scale) => Size(size * 2, size * 2);
-
-  @override
-  List<Object?> get props => [isBuy, color, size, strength];
 }

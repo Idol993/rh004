@@ -1,18 +1,24 @@
 /// stock_data_service.dart
 /// ========================
-/// 股票数据加载服务 - 统一管理本地 assets 资源加载。
+/// 股票数据加载服务 - 统一管理本地资源加载。
+///
+/// 加载优先级：
+///   1. 优先从 assets/demo_data/ 目录读取（后端同步的真实数据）
+///   2. assets 加载失败时，自动 fallback 到内置 mock_data.dart
+///   3. 任何异常都返回默认数据或空对象，确保页面不崩溃
 ///
 /// 功能：
-///   1. 从 assets/demo_data/ 加载股票列表索引
-///   2. 加载单只股票的完整分析数据（payload + OHLCV）
-///   3. 空值安全：加载失败或数据缺失时返回空对象，不崩溃
-///   4. 支持缓存已加载的数据，避免重复 IO
+///   - 从 assets/demo_data/ 加载股票列表索引
+///   - 加载单只股票的完整分析数据（payload + OHLCV + closePrices）
+///   - 空值安全：加载失败或数据缺失时返回空对象，不崩溃
+///   - 支持缓存已加载的数据，避免重复 IO
 ///
 /// 遵循 Effective Dart 规范。
 
 import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'signal_models.dart';
+import 'mock_data.dart';
 
 /// 股票基本信息
 class StockInfo {
@@ -58,6 +64,14 @@ class StockDataBundle {
   bool get isNotEmpty => !isEmpty;
 }
 
+/// 内置的默认股票列表（assets 加载失败时使用）
+const List<StockInfo> _kDefaultStocks = [
+  StockInfo(symbol: '000001.SZ', name: '平安银行'),
+  StockInfo(symbol: '600519.SH', name: '贵州茅台'),
+  StockInfo(symbol: '300750.SZ', name: '宁德时代'),
+  StockInfo(symbol: '601318.SH', name: '中国平安'),
+];
+
 /// 股票数据服务
 class StockDataService {
   static const String _basePath = 'assets/demo_data';
@@ -70,7 +84,7 @@ class StockDataService {
   final Map<String, StockDataBundle> _cache = {};
   List<StockInfo>? _stockList;
 
-  /// 获取股票列表（带缓存）
+  /// 获取股票列表（带缓存 + fallback）
   Future<List<StockInfo>> getStockList() async {
     if (_stockList != null) return _stockList!;
 
@@ -79,27 +93,71 @@ class StockDataService {
       final jsonMap = jsonDecode(content) as Map<String, dynamic>?;
       final list = (jsonMap?['symbols'] as List?)
               ?.map((e) => StockInfo.fromJson(e as Map<String, dynamic>?))
+              .where((s) => s.symbol.isNotEmpty)
               .toList() ??
           [];
-      _stockList = list;
-      return list;
-    } catch (e) {
-      return const [];
-    }
+      if (list.isNotEmpty) {
+        _stockList = list;
+        return list;
+      }
+    } catch (_) {}
+
+    _stockList = _kDefaultStocks;
+    return _kDefaultStocks;
   }
 
-  /// 加载单只股票数据（带缓存）
+  /// 加载单只股票数据（带缓存 + fallback）
   Future<StockDataBundle> loadStock(String symbol) async {
     if (_cache.containsKey(symbol)) {
       return _cache[symbol]!;
     }
 
+    StockDataBundle? bundle;
+
     try {
       final content = await rootBundle.loadString('$_basePath/$symbol.json');
-      final bundle = _parseStockData(content);
-      _cache[symbol] = bundle;
-      return bundle;
-    } catch (e) {
+      bundle = _parseStockData(content);
+    } catch (_) {
+      bundle = null;
+    }
+
+    if (bundle == null || bundle.isEmpty) {
+      bundle = _loadFromMockData(symbol);
+    }
+
+    _cache[symbol] = bundle;
+    return bundle;
+  }
+
+  /// 从内置 mock_data 加载 fallback 数据
+  StockDataBundle _loadFromMockData(String symbol) {
+    try {
+      final data = MockStockData.getData(symbol);
+      final name = (data['name'] as String?) ?? '';
+
+      final payloadJson = data['payload'];
+      AnalysisPayload payload;
+      if (payloadJson is String) {
+        payload = AnalysisPayload.fromJsonString(payloadJson);
+      } else if (payloadJson is Map<String, dynamic>) {
+        payload = AnalysisPayload.fromJson(payloadJson);
+      } else {
+        payload = AnalysisPayload.empty();
+      }
+
+      final closePrices = (data['closePrices'] as List?)
+              ?.map((e) => (e as num?)?.toDouble() ?? 0.0)
+              .toList() ??
+          const [];
+
+      return StockDataBundle(
+        symbol: symbol,
+        name: name,
+        payload: payload,
+        closePrices: closePrices,
+        ohlcv: const [],
+      );
+    } catch (_) {
       return StockDataBundle.empty();
     }
   }
@@ -148,6 +206,10 @@ class StockDataService {
               })
               .toList() ??
           const [];
+
+      if (symbol.isEmpty || closePrices.isEmpty) {
+        return StockDataBundle.empty();
+      }
 
       return StockDataBundle(
         symbol: symbol,
