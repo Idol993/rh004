@@ -225,6 +225,10 @@ class PayloadSerializer:
     ) -> AnalysisPayload:
         """从模型原始输出构建完整载荷。
 
+        空值安全处理：
+          - attention_weights 为 None 时，返回空列表 []
+          - 0-d 数组自动展平为 1-d 列表
+
         Parameters
         ----------
         pred_value : float
@@ -249,12 +253,18 @@ class PayloadSerializer:
             confidence_interval=ci,
             predicted_return=round(pred_value, 6),
         )
-        attn_list = []
+
+        attn_list: List[float] = []
         if attention_weights is not None:
-            attn_list = [round(float(w), 6) for w in attention_weights]
+            arr = np.asarray(attention_weights)
+            if arr.ndim == 0:
+                arr = np.array([arr])
+            elif arr.ndim > 1:
+                arr = arr.flatten()
+            attn_list = [round(float(w), 6) for w in arr]
 
         return AnalysisPayload(
-            symbol=symbol,
+            symbol=symbol if symbol else "",
             timestamp=datetime.now(timezone.utc).isoformat(),
             prediction=prediction,
             attention_weights=attn_list,
@@ -267,6 +277,9 @@ class PayloadSerializer:
         strength_threshold: float = 0.6,
     ) -> AnalysisPayload:
         """根据趋势概率和价格序列，生成买卖信号点。
+
+        空值安全处理：
+          - close_prices 为空或长度不足时，返回空信号列表
 
         信号生成规则：
           - 当趋势上涨概率 > threshold 且当前处于局部低点 → buy
@@ -282,17 +295,28 @@ class PayloadSerializer:
             信号触发阈值。
         """
         trend = payload.prediction.trend_probability
-        n = len(close_prices)
+        prices = np.asarray(close_prices)
+        n = len(prices)
         signals: List[SignalPoint] = []
+
+        if n < 3:
+            payload.signals = signals
+            return payload
 
         for i in range(2, n):
             is_local_min = (
-                close_prices[i - 1] < close_prices[i - 2]
-                and close_prices[i - 1] < close_prices[i]
+                not np.isnan(prices[i - 1])
+                and not np.isnan(prices[i - 2])
+                and not np.isnan(prices[i])
+                and prices[i - 1] < prices[i - 2]
+                and prices[i - 1] < prices[i]
             )
             is_local_max = (
-                close_prices[i - 1] > close_prices[i - 2]
-                and close_prices[i - 1] > close_prices[i]
+                not np.isnan(prices[i - 1])
+                and not np.isnan(prices[i - 2])
+                and not np.isnan(prices[i])
+                and prices[i - 1] > prices[i - 2]
+                and prices[i - 1] > prices[i]
             )
 
             if trend.up > strength_threshold and is_local_min:
@@ -300,7 +324,7 @@ class PayloadSerializer:
                     SignalPoint(
                         index=i - 1,
                         type="buy",
-                        price=round(float(close_prices[i - 1]), 4),
+                        price=round(float(prices[i - 1]), 4),
                         strength=round(trend.up, 4),
                     )
                 )
@@ -309,7 +333,7 @@ class PayloadSerializer:
                     SignalPoint(
                         index=i - 1,
                         type="sell",
-                        price=round(float(close_prices[i - 1]), 4),
+                        price=round(float(prices[i - 1]), 4),
                         strength=round(trend.down, 4),
                     )
                 )
@@ -337,7 +361,13 @@ class DartCodeGenerator:
 
     @staticmethod
     def generate_dart_models() -> str:
-        """生成 Dart 数据模型代码（供参考/复制到 Flutter 项目）。"""
+        """生成 Dart 数据模型代码（供参考/复制到 Flutter 项目）。
+
+        空值安全设计：
+          - 所有字段都有合理的默认值（0.0, "", [], etc.）
+          - 解析时遇到 null 或类型不匹配时，自动回退到默认值
+          - 使用 ? 操作符和 as? 安全转型
+        """
         return '''
 import 'dart:convert';
 
@@ -352,14 +382,20 @@ class TrendProbability {
     required this.flat,
   });
 
-  factory TrendProbability.fromJson(Map<String, dynamic> json) =>
+  factory TrendProbability.fromJson(Map<String, dynamic>? json) =>
       TrendProbability(
-        up: (json['up'] as num).toDouble(),
-        down: (json['down'] as num).toDouble(),
-        flat: (json['flat'] as num).toDouble(),
+        up: (json?['up'] as num?)?.toDouble() ?? 0.0,
+        down: (json?['down'] as num?)?.toDouble() ?? 0.0,
+        flat: (json?['flat'] as num?)?.toDouble() ?? 0.0,
       );
 
   Map<String, dynamic> toJson() => {'up': up, 'down': down, 'flat': flat};
+
+  double get primaryProbability =>
+      up > down ? (up > flat ? up : flat) : (down > flat ? down : flat);
+
+  String get primaryDirection =>
+      up > down ? (up > flat ? 'up' : 'flat') : (down > flat ? 'down' : 'flat');
 }
 
 class ConfidenceInterval {
@@ -373,15 +409,19 @@ class ConfidenceInterval {
     required this.level,
   });
 
-  factory ConfidenceInterval.fromJson(Map<String, dynamic> json) =>
+  factory ConfidenceInterval.fromJson(Map<String, dynamic>? json) =>
       ConfidenceInterval(
-        lower: (json['lower'] as num).toDouble(),
-        upper: (json['upper'] as num).toDouble(),
-        level: (json['level'] as num).toDouble(),
+        lower: (json?['lower'] as num?)?.toDouble() ?? 0.0,
+        upper: (json?['upper'] as num?)?.toDouble() ?? 0.0,
+        level: (json?['level'] as num?)?.toDouble() ?? 0.95,
       );
 
   Map<String, dynamic> toJson() =>
       {'lower': lower, 'upper': upper, 'level': level};
+
+  double get width => upper - lower;
+
+  double get center => (lower + upper) / 2;
 }
 
 class PredictionResult {
@@ -395,13 +435,14 @@ class PredictionResult {
     required this.predictedReturn,
   });
 
-  factory PredictionResult.fromJson(Map<String, dynamic> json) =>
+  factory PredictionResult.fromJson(Map<String, dynamic>? json) =>
       PredictionResult(
-        trendProbability:
-            TrendProbability.fromJson(json['trend_probability']),
-        confidenceInterval:
-            ConfidenceInterval.fromJson(json['confidence_interval']),
-        predictedReturn: (json['predicted_return'] as num).toDouble(),
+        trendProbability: TrendProbability.fromJson(
+            json?['trend_probability'] as Map<String, dynamic>?),
+        confidenceInterval: ConfidenceInterval.fromJson(
+            json?['confidence_interval'] as Map<String, dynamic>?),
+        predictedReturn:
+            (json?['predicted_return'] as num?)?.toDouble() ?? 0.0,
       );
 }
 
@@ -418,12 +459,16 @@ class SignalPoint {
     required this.strength,
   });
 
-  factory SignalPoint.fromJson(Map<String, dynamic> json) => SignalPoint(
-        index: json['index'] as int,
-        type: json['type'] as String,
-        price: (json['price'] as num).toDouble(),
-        strength: (json['strength'] as num).toDouble(),
+  factory SignalPoint.fromJson(Map<String, dynamic>? json) => SignalPoint(
+        index: (json?['index'] as int?) ?? 0,
+        type: (json?['type'] as String?) ?? 'unknown',
+        price: (json?['price'] as num?)?.toDouble() ?? 0.0,
+        strength: (json?['strength'] as num?)?.toDouble() ?? 0.0,
       );
+
+  bool get isBuy => type == 'buy';
+  bool get isSell => type == 'sell';
+  bool get isValid => isBuy || isSell;
 }
 
 class AnalysisPayload {
@@ -443,21 +488,59 @@ class AnalysisPayload {
     required this.attentionWeights,
   });
 
-  factory AnalysisPayload.fromJson(Map<String, dynamic> json) =>
-      AnalysisPayload(
-        version: json['version'] as String,
-        symbol: json['symbol'] as String,
-        timestamp: json['timestamp'] as String,
-        prediction: PredictionResult.fromJson(json['prediction']),
-        signals: (json['signals'] as List)
-            .map((e) => SignalPoint.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        attentionWeights: (json['attention_weights'] as List)
-            .map((e) => (e as num).toDouble())
-            .toList(),
+  factory AnalysisPayload.empty() => AnalysisPayload(
+        version: '1.0',
+        symbol: '',
+        timestamp: '',
+        prediction: PredictionResult(
+          trendProbability: const TrendProbability(up: 0, down: 0, flat: 1),
+          confidenceInterval:
+              const ConfidenceInterval(lower: 0, upper: 0, level: 0.95),
+          predictedReturn: 0.0,
+        ),
+        signals: const [],
+        attentionWeights: const [],
       );
 
-  factory AnalysisPayload.fromJsonString(String str) =>
-      AnalysisPayload.fromJson(jsonDecode(str) as Map<String, dynamic>);
+  factory AnalysisPayload.fromJson(Map<String, dynamic>? json) =>
+      AnalysisPayload(
+        version: (json?['version'] as String?) ?? '1.0',
+        symbol: (json?['symbol'] as String?) ?? '',
+        timestamp: (json?['timestamp'] as String?) ?? '',
+        prediction: PredictionResult.fromJson(
+            json?['prediction'] as Map<String, dynamic>?),
+        signals: (json?['signals'] as List?)
+                ?.map((e) =>
+                    SignalPoint.fromJson(e as Map<String, dynamic>?))
+                .where((s) => s.isValid)
+                .toList() ??
+            const [],
+        attentionWeights: (json?['attention_weights'] as List?)
+                ?.map((e) => (e as num?)?.toDouble() ?? 0.0)
+                .toList() ??
+            const [],
+      );
+
+  factory AnalysisPayload.fromJsonString(String? str) {
+    if (str == null || str.isEmpty) {
+      return AnalysisPayload.empty();
+    }
+    try {
+      return AnalysisPayload.fromJson(
+          jsonDecode(str) as Map<String, dynamic>?);
+    } catch (e) {
+      return AnalysisPayload.empty();
+    }
+  }
+
+  List<SignalPoint> get buySignals =>
+      signals.where((s) => s.isBuy).toList();
+
+  List<SignalPoint> get sellSignals =>
+      signals.where((s) => s.isSell).toList();
+
+  bool get hasSignals => signals.isNotEmpty;
+  bool get hasAttentionWeights => attentionWeights.isNotEmpty;
+  bool get isEmpty => symbol.isEmpty;
 }
 '''

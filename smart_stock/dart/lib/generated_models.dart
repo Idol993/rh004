@@ -12,14 +12,20 @@ class TrendProbability {
     required this.flat,
   });
 
-  factory TrendProbability.fromJson(Map<String, dynamic> json) =>
+  factory TrendProbability.fromJson(Map<String, dynamic>? json) =>
       TrendProbability(
-        up: (json['up'] as num).toDouble(),
-        down: (json['down'] as num).toDouble(),
-        flat: (json['flat'] as num).toDouble(),
+        up: (json?['up'] as num?)?.toDouble() ?? 0.0,
+        down: (json?['down'] as num?)?.toDouble() ?? 0.0,
+        flat: (json?['flat'] as num?)?.toDouble() ?? 0.0,
       );
 
   Map<String, dynamic> toJson() => {'up': up, 'down': down, 'flat': flat};
+
+  double get primaryProbability =>
+      up > down ? (up > flat ? up : flat) : (down > flat ? down : flat);
+
+  String get primaryDirection =>
+      up > down ? (up > flat ? 'up' : 'flat') : (down > flat ? 'down' : 'flat');
 }
 
 class ConfidenceInterval {
@@ -33,15 +39,19 @@ class ConfidenceInterval {
     required this.level,
   });
 
-  factory ConfidenceInterval.fromJson(Map<String, dynamic> json) =>
+  factory ConfidenceInterval.fromJson(Map<String, dynamic>? json) =>
       ConfidenceInterval(
-        lower: (json['lower'] as num).toDouble(),
-        upper: (json['upper'] as num).toDouble(),
-        level: (json['level'] as num).toDouble(),
+        lower: (json?['lower'] as num?)?.toDouble() ?? 0.0,
+        upper: (json?['upper'] as num?)?.toDouble() ?? 0.0,
+        level: (json?['level'] as num?)?.toDouble() ?? 0.95,
       );
 
   Map<String, dynamic> toJson() =>
       {'lower': lower, 'upper': upper, 'level': level};
+
+  double get width => upper - lower;
+
+  double get center => (lower + upper) / 2;
 }
 
 class PredictionResult {
@@ -55,13 +65,14 @@ class PredictionResult {
     required this.predictedReturn,
   });
 
-  factory PredictionResult.fromJson(Map<String, dynamic> json) =>
+  factory PredictionResult.fromJson(Map<String, dynamic>? json) =>
       PredictionResult(
-        trendProbability:
-            TrendProbability.fromJson(json['trend_probability']),
-        confidenceInterval:
-            ConfidenceInterval.fromJson(json['confidence_interval']),
-        predictedReturn: (json['predicted_return'] as num).toDouble(),
+        trendProbability: TrendProbability.fromJson(
+            json?['trend_probability'] as Map<String, dynamic>?),
+        confidenceInterval: ConfidenceInterval.fromJson(
+            json?['confidence_interval'] as Map<String, dynamic>?),
+        predictedReturn:
+            (json?['predicted_return'] as num?)?.toDouble() ?? 0.0,
       );
 }
 
@@ -78,12 +89,16 @@ class SignalPoint {
     required this.strength,
   });
 
-  factory SignalPoint.fromJson(Map<String, dynamic> json) => SignalPoint(
-        index: json['index'] as int,
-        type: json['type'] as String,
-        price: (json['price'] as num).toDouble(),
-        strength: (json['strength'] as num).toDouble(),
+  factory SignalPoint.fromJson(Map<String, dynamic>? json) => SignalPoint(
+        index: (json?['index'] as int?) ?? 0,
+        type: (json?['type'] as String?) ?? 'unknown',
+        price: (json?['price'] as num?)?.toDouble() ?? 0.0,
+        strength: (json?['strength'] as num?)?.toDouble() ?? 0.0,
       );
+
+  bool get isBuy => type == 'buy';
+  bool get isSell => type == 'sell';
+  bool get isValid => isBuy || isSell;
 }
 
 class AnalysisPayload {
@@ -103,20 +118,58 @@ class AnalysisPayload {
     required this.attentionWeights,
   });
 
-  factory AnalysisPayload.fromJson(Map<String, dynamic> json) =>
-      AnalysisPayload(
-        version: json['version'] as String,
-        symbol: json['symbol'] as String,
-        timestamp: json['timestamp'] as String,
-        prediction: PredictionResult.fromJson(json['prediction']),
-        signals: (json['signals'] as List)
-            .map((e) => SignalPoint.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        attentionWeights: (json['attention_weights'] as List)
-            .map((e) => (e as num).toDouble())
-            .toList(),
+  factory AnalysisPayload.empty() => AnalysisPayload(
+        version: '1.0',
+        symbol: '',
+        timestamp: '',
+        prediction: PredictionResult(
+          trendProbability: const TrendProbability(up: 0, down: 0, flat: 1),
+          confidenceInterval:
+              const ConfidenceInterval(lower: 0, upper: 0, level: 0.95),
+          predictedReturn: 0.0,
+        ),
+        signals: const [],
+        attentionWeights: const [],
       );
 
-  factory AnalysisPayload.fromJsonString(String str) =>
-      AnalysisPayload.fromJson(jsonDecode(str) as Map<String, dynamic>);
+  factory AnalysisPayload.fromJson(Map<String, dynamic>? json) =>
+      AnalysisPayload(
+        version: (json?['version'] as String?) ?? '1.0',
+        symbol: (json?['symbol'] as String?) ?? '',
+        timestamp: (json?['timestamp'] as String?) ?? '',
+        prediction: PredictionResult.fromJson(
+            json?['prediction'] as Map<String, dynamic>?),
+        signals: (json?['signals'] as List?)
+                ?.map((e) =>
+                    SignalPoint.fromJson(e as Map<String, dynamic>?))
+                .where((s) => s.isValid)
+                .toList() ??
+            const [],
+        attentionWeights: (json?['attention_weights'] as List?)
+                ?.map((e) => (e as num?)?.toDouble() ?? 0.0)
+                .toList() ??
+            const [],
+      );
+
+  factory AnalysisPayload.fromJsonString(String? str) {
+    if (str == null || str.isEmpty) {
+      return AnalysisPayload.empty();
+    }
+    try {
+      return AnalysisPayload.fromJson(
+          jsonDecode(str) as Map<String, dynamic>?);
+    } catch (e) {
+      return AnalysisPayload.empty();
+    }
+  }
+
+  List<SignalPoint> get buySignals =>
+      signals.where((s) => s.isBuy).toList();
+
+  List<SignalPoint> get sellSignals =>
+      signals.where((s) => s.isSell).toList();
+
+  bool get hasSignals => signals.isNotEmpty;
+  bool get hasAttentionWeights => attentionWeights.isNotEmpty;
+  bool get isEmpty => symbol.isEmpty;
 }
