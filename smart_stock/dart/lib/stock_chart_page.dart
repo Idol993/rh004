@@ -150,7 +150,7 @@ class _StockChartPageState extends State<StockChartPage> {
             underline: const SizedBox.shrink(),
           ),
           const Spacer(),
-          if (_currentData.timestamp.isNotEmpty)
+          if (_currentData.payload.timestamp.isNotEmpty)
             Text(
               _formatTimestamp(_currentData.payload.timestamp),
               style: TextStyle(color: Colors.grey[600], fontSize: 12),
@@ -816,6 +816,11 @@ class _StockChartPageState extends State<StockChartPage> {
   }
 
   Widget _buildAttentionHeatmap(List<double> weights) {
+    if (weights.isEmpty) return const SizedBox.shrink();
+
+    final closePrices = _currentData.closePrices;
+    final offset = closePrices.length - weights.length;
+    final totalBars = closePrices.length;
     final maxW = weights.reduce((a, b) => a > b ? a : b);
 
     return SizedBox(
@@ -824,21 +829,28 @@ class _StockChartPageState extends State<StockChartPage> {
         borderRadius: BorderRadius.circular(6),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final itemWidth = constraints.maxWidth / weights.length;
+            final barWidth = constraints.maxWidth / totalBars;
             return Row(
-              children: List.generate(weights.length, (index) {
-                final normalized =
-                    weights[index] / (maxW + 1e-10);
-                final color = Color.lerp(
-                  Colors.blue[50]!,
-                  Colors.deepOrange[400]!,
-                  normalized.clamp(0.0, 1.0),
-                )!;
-                return Container(
-                  width: itemWidth,
-                  color: color,
-                );
-              }),
+              children: [
+                if (offset > 0)
+                  Container(
+                    width: barWidth * offset,
+                    color: Colors.grey[100],
+                  ),
+                ...List.generate(weights.length, (index) {
+                  final normalized =
+                      weights[index] / (maxW + 1e-10);
+                  final color = Color.lerp(
+                    Colors.blue[50]!,
+                    Colors.deepOrange[400]!,
+                    normalized.clamp(0.0, 1.0),
+                  )!;
+                  return Container(
+                    width: barWidth,
+                    color: color,
+                  );
+                }),
+              ],
             );
           },
         ),

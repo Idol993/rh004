@@ -138,6 +138,8 @@ class ChartConfigGenerator {
     final weights = payload.attentionWeights;
     if (weights.isEmpty) return [];
 
+    final offset = closePrices.length - weights.length;
+
     final maxW = weights.reduce(math.max);
     final normalized = weights.map((w) => w / (maxW + 1e-10)).toList();
 
@@ -150,8 +152,8 @@ class ChartConfigGenerator {
       } else {
         if (start >= 0 && (i - start) >= minConsecutive) {
           highlights.add(AttentionHighlight(
-            startIndex: start,
-            endIndex: i - 1,
+            startIndex: start + offset,
+            endIndex: i - 1 + offset,
             intensity: normalized.sublist(start, i).reduce(math.max),
           ));
         }
@@ -161,8 +163,8 @@ class ChartConfigGenerator {
 
     if (start >= 0 && (normalized.length - start) >= minConsecutive) {
       highlights.add(AttentionHighlight(
-        startIndex: start,
-        endIndex: normalized.length - 1,
+        startIndex: start + offset,
+        endIndex: normalized.length - 1 + offset,
         intensity: normalized.sublist(start).reduce(math.max),
       ));
     }
