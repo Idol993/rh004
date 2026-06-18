@@ -232,23 +232,24 @@ class ChartConfigGenerator {
   /// 构建买卖信号箭头
   List<LineChartBarData> _buildSignalMarkers(
     List<SignalMarker> markers,
-    List<FlSpot> klineSpots,
   ) {
     if (markers.isEmpty) return [];
+
+    final allPrices = <double>[];
+    for (final p in closePrices) {
+      if (!p.isNaN && !p.isInfinite) allPrices.add(p);
+    }
+    final priceRange = allPrices.isNotEmpty
+        ? allPrices.reduce(math.max) - allPrices.reduce(math.min)
+        : 1.0;
+    final arrowOffset = priceRange * 0.02;
 
     final lineBars = <LineChartBarData>[];
 
     for (final marker in markers) {
       final color = marker.isBuy ? _upColor : _downColor;
-      final spots = <FlSpot>[];
-
-      for (final spot in klineSpots) {
-        if (spot.x.toInt() == marker.index) {
-          final yOffset = marker.isBuy ? -0.5 : 0.5;
-          spots.add(FlSpot(spot.x, spot.y + yOffset));
-          break;
-        }
-      }
+      final yOffset = marker.isBuy ? -arrowOffset : arrowOffset;
+      final spots = [FlSpot(marker.index.toDouble(), marker.price + yOffset)];
 
       lineBars.add(
         LineChartBarData(
@@ -274,63 +275,86 @@ class ChartConfigGenerator {
     return lineBars;
   }
 
-  /// 构建注意力高亮区间（使用 between bars）
-  List<BetweenBarsData> _buildAttentionHighlights(
+  /// 构建注意力高亮区间垂直条
+  List<VerticalLine> _buildAttentionHighlightLines(
     List<AttentionHighlight> highlights,
   ) {
-    final bars = <BetweenBarsData>[];
-    if (highlights.isEmpty) return bars;
-    return bars;
+    if (highlights.isEmpty) return const [];
+
+    final lines = <VerticalLine>[];
+    for (final h in highlights) {
+      final centerX = (h.startIndex + h.endIndex) / 2.0;
+      final width = (h.endIndex - h.startIndex + 1).toDouble();
+      final opacity = 0.15 + h.intensity * 0.25;
+
+      lines.add(
+        VerticalLine(
+          x: centerX,
+          color: _highlightColor.withOpacity(opacity),
+          strokeWidth: width,
+        ),
+      );
+    }
+    return lines;
   }
 
-  /// 构建额外线条（置信区间）
-  ExtraLinesData _buildExtraLines(PredictionOverlay overlay) {
-    final lines = <HorizontalLine>[];
+  /// 构建额外线条（置信区间 + 注意力高亮）
+  ExtraLinesData _buildExtraLines(
+    PredictionOverlay overlay,
+    List<AttentionHighlight> highlights,
+  ) {
+    final hLines = <HorizontalLine>[];
+    final vLines = _buildAttentionHighlightLines(highlights);
 
-    if (overlay.lowerBound > 0) {
-      lines.add(
+    final lastPrice = closePrices.isNotEmpty ? closePrices.last : 0.0;
+
+    if (overlay.lowerBound > 0 && overlay.lowerBound < lastPrice) {
+      hLines.add(
         HorizontalLine(
           y: overlay.lowerBound,
-          color: _upColor.withOpacity(0.5),
+          color: _upColor.withOpacity(0.6),
           strokeWidth: 1,
           dashArray: [4, 4],
           label: HorizontalLineLabel(
             show: true,
             alignment: Alignment.topRight,
-            padding: const EdgeInsets.only(right: 8, top: -8),
+            padding: const EdgeInsets.only(right: 8, top: 2),
             style: TextStyle(
               color: _upColor,
               fontSize: 10,
+              fontWeight: FontWeight.w500,
             ),
-            labelResolver: (line) => ' 低 ${overlay.lowerBound.toStringAsFixed(2)}',
+            labelResolver: (line) => ' 置信低 ${overlay.lowerBound.toStringAsFixed(2)}',
           ),
         ),
       );
     }
 
-    if (overlay.upperBound > 0) {
-      lines.add(
+    if (overlay.upperBound > 0 && overlay.upperBound > lastPrice) {
+      hLines.add(
         HorizontalLine(
           y: overlay.upperBound,
-          color: _downColor.withOpacity(0.5),
+          color: _downColor.withOpacity(0.6),
           strokeWidth: 1,
           dashArray: [4, 4],
           label: HorizontalLineLabel(
             show: true,
             alignment: Alignment.bottomRight,
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.only(right: 8, bottom: 2),
             style: TextStyle(
               color: _downColor,
               fontSize: 10,
+              fontWeight: FontWeight.w500,
             ),
-            labelResolver: (line) => ' 高 ${overlay.upperBound.toStringAsFixed(2)}',
+            labelResolver: (line) => ' 置信高 ${overlay.upperBound.toStringAsFixed(2)}',
           ),
         ),
       );
     }
 
     return ExtraLinesData(
-      horizontalLines: lines,
+      horizontalLines: hLines,
+      verticalLines: vLines,
     );
   }
 
@@ -342,7 +366,7 @@ class ChartConfigGenerator {
 
     final klineBar = _buildKLine();
     final predictionBar = _buildPredictionLine(overlay);
-    final signalBars = _buildSignalMarkers(markers, klineBar.spots);
+    final signalBars = _buildSignalMarkers(markers);
 
     final lineBarsData = <LineChartBarData>[
       klineBar,
@@ -367,7 +391,7 @@ class ChartConfigGenerator {
 
     final chartData = LineChartData(
       lineBarsData: lineBarsData,
-      extraLinesData: _buildExtraLines(overlay),
+      extraLinesData: _buildExtraLines(overlay, highlights),
       titlesData: FlTitlesData(
         show: true,
         bottomTitles: AxisTitles(
